@@ -68,3 +68,32 @@ def daily_checkin(user_id: int, db: Session = Depends(get_db)):
     db.refresh(user)
 
     return {"xp": user.xp, "streak": user.streak, "frozen_days": user.frozen_days}
+
+
+@app.get("/leagues/{league_id}", response_model=list[dict])
+def get_league(league_id: int, db: Session = Depends(get_db)):
+    """Return all users in a given league (50 users per league)."""
+    users = db.query(models.User).order_by(models.User.xp.desc()).all()
+    start = (league_id - 1) * 50
+    end = start + 50
+    league_users = users[start:end]
+
+    return [
+        {"id": u.id, "username": u.username, "xp": u.xp, "streak": u.streak}
+        for u in league_users
+    ]
+
+
+@app.get("/users/{user_id}/league", response_model=dict)
+def get_user_league(user_id: int, db: Session = Depends(get_db)):
+    """Find which league a specific user belongs to."""
+    users = db.query(models.User).order_by(models.User.xp.desc()).all()
+    user_ids = [u.id for u in users]
+
+    if user_id not in user_ids:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    rank = user_ids.index(user_id)  # 0-based index
+    league_id = (rank // 50) + 1
+
+    return {"user_id": user_id, "league_id": league_id, "rank": rank + 1}
