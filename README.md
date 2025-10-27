@@ -33,6 +33,7 @@ Code
 ## ⚙️ Endpoints
 
 ### Create User
+
 ```http
 POST /users/?username=alice
 Response:
@@ -131,3 +132,4 @@ Both request-time and precomputed approaches are implemented/explained.
 Tests are comprehensive and document the expected behavior.
 
 Background jobs are separated cleanly (tasks.py) for easy scheduling.
+```
