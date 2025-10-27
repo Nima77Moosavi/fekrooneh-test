@@ -1,20 +1,21 @@
 # main.py
+from sqlalchemy import func
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import date
 
-from database import SessionLocal, engine
+from database import SessionLocal
 import models
-
-# Make sure tables exist
-models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Dependency: get a DB session for each request
 
-
+# Dependency: provide a database session for each request
 def get_db():
+    """
+    Open a new database session for the request and close it afterwards.
+    This ensures we don't leak connections.
+    """
     db = SessionLocal()
     try:
         yield db
@@ -24,7 +25,9 @@ def get_db():
 
 @app.post("/users/", response_model=dict)
 def create_user(username: str, db: Session = Depends(get_db)):
-    """Create a new user with default XP, streak, and frozen days."""
+    """
+    Create a new user with default XP, streak, and frozen days.
+    """
     user = models.User(username=username)
     db.add(user)
     db.commit()
@@ -34,8 +37,15 @@ def create_user(username: str, db: Session = Depends(get_db)):
 
 @app.post("/checkin/{user_id}", response_model=dict)
 def daily_checkin(user_id: int, db: Session = Depends(get_db)):
-    """Daily login endpoint: +10 XP, update streak, handle frozen days."""
-    user = db.query(models.User).get(user_id)
+    """
+    Daily login endpoint:
+    - +10 XP on check-in
+    - Update streak (consecutive days)
+    - Consume frozen day if user missed exactly one day
+    - Reset streak if user missed 2+ days
+    """
+    # Use Session.get() instead of Query.get() to avoid deprecation warnings
+    user = db.get(models.User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -55,7 +65,7 @@ def daily_checkin(user_id: int, db: Session = Depends(get_db)):
             user.frozen_days -= 1
             user.streak += 1
         else:
-            # missed too many days
+            # missed 2+ consecutive days
             user.streak = 1
     else:
         # first ever check-in
@@ -72,11 +82,28 @@ def daily_checkin(user_id: int, db: Session = Depends(get_db)):
 
 @app.get("/leagues/{league_id}", response_model=list[dict])
 def get_league(league_id: int, db: Session = Depends(get_db)):
-    """Return all users in a given league (50 users per league)."""
-    users = db.query(models.User).order_by(models.User.xp.desc()).all()
-    start = (league_id - 1) * 50
-    end = start + 50
-    league_users = users[start:end]
+    """
+    Return all users in a given league (50 users per league).
+
+    Current approach:
+    - Uses SQL OFFSET + LIMIT to fetch only the 50 users for the requested league.
+    - Efficient with proper indexing on `xp`, even with millions of users.
+
+    Production optimization:
+    - Precompute `league_id` for each user in a background job (cron or Celery).
+    - Then this endpoint becomes a simple O(1) query:
+        SELECT * FROM users WHERE league_id = :league_id
+    """
+    page_size = 50
+    offset = (league_id - 1) * page_size
+
+    league_users = (
+        db.query(models.User)
+        .order_by(models.User.xp.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
 
     return [
         {"id": u.id, "username": u.username, "xp": u.xp, "streak": u.streak}
@@ -86,14 +113,37 @@ def get_league(league_id: int, db: Session = Depends(get_db)):
 
 @app.get("/users/{user_id}/league", response_model=dict)
 def get_user_league(user_id: int, db: Session = Depends(get_db)):
-    """Find which league a specific user belongs to."""
-    users = db.query(models.User).order_by(models.User.xp.desc()).all()
-    user_ids = [u.id for u in users]
+    """
+    Find which league a specific user belongs to.
 
-    if user_id not in user_ids:
+    Current approach:
+    - Uses a SQL window function (ROW_NUMBER() OVER ORDER BY xp DESC).
+    - Guarantees every user has a unique sequential rank, even if XP values are tied.
+    - This ensures exactly 50 users per league.
+
+    Alternative approach:
+    - Use RANK() if you want ties to share the same rank (like in sports),
+      but then leagues may overflow/underflow.
+    - For predictable league sizes, ROW_NUMBER() is the better choice.
+
+    Production optimization:
+    - Run a periodic batch job (cron or Celery) that updates `rank` and `league_id`.
+    - Then this endpoint is just:
+        SELECT rank, league_id FROM users WHERE id = :user_id
+    - O(1) lookup, no heavy ranking query.
+    """
+    subq = (
+        db.query(
+            models.User.id,
+            func.row_number().over(order_by=models.User.xp.desc()).label("rank")
+        ).subquery()
+    )
+
+    row = db.query(subq.c.rank).filter(subq.c.id == user_id).first()
+    if not row:
         raise HTTPException(status_code=404, detail="User not found")
 
-    rank = user_ids.index(user_id)  # 0-based index
-    league_id = (rank // 50) + 1
+    rank = row.rank
+    league_id = (rank - 1) // 50 + 1
 
-    return {"user_id": user_id, "league_id": league_id, "rank": rank + 1}
+    return {"user_id": user_id, "league_id": league_id, "rank": rank}
