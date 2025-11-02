@@ -90,12 +90,14 @@ def get_user_league(db: Session, username: str):
 # Check-in Logic
 # -----------------------------
 def daily_checkin(db: Session, username: str, password: str):
+    # check to see if username and password are correct
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.password != password:
         raise HTTPException(status_code=401, detail="Incorrect password")
 
+    # logic
     today = date.today()
 
     if user.last_checkin == today:
@@ -123,24 +125,24 @@ def daily_checkin(db: Session, username: str, password: str):
     user.xp += 10
     user.last_checkin = today
 
-    db.commit()
-    db.refresh(user)
-    assign_leagues(db)
-    assign_global_ranks(db)
-
-    # log event
+    # add event to session
     log_event(
         db,
         event_type="checkin",
         user_id=user.id,
-        payload={
-            "streak": user.streak,
-            "xp": user.xp,
-            "frozen_days": user.frozen_days,
-            "last_checkin": str(user.last_checkin),
-            "last_streak_reset": str(user.last_streak_reset) if user.last_streak_reset else None
-        }
+        payload={"streak": user.streak,
+                 "max_streak": user.max_streak,
+                 "xp": user.xp,
+                 "frozen_days": user.frozen_days,
+                 "last_checkin": user.last_checkin,
+                 "last_streak_reset": user.last_streak_reset,
+                 },
+        partition_key=str(user.id),
     )
+
+    db.commit()
+    db.refresh(user)
+
     return user
 
 

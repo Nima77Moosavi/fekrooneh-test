@@ -3,6 +3,7 @@ from sqlalchemy.orm import Relationship
 from database import Base
 
 from datetime import datetime
+import uuid
 
 
 class League(Base):
@@ -36,10 +37,30 @@ class User(Base):
 
 class EventLog(Base):
     __tablename__ = "event_logs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
-    event_type = Column(String, index=True) # e.g. "checkin", "user_created"
+
+    # Unique event identity
+    event_id = Column(String, unique=True, index=True,
+                      default=lambda: str(uuid.uuid4()))
+
+    # Classification
+    event_type = Column(String, index=True)  # e.g. "checkin", "user_created"
     user_id = Column(Integer, index=True)
+    partition_key = Column(String, index=True)  # e.g. user_id or league_id for ordering
+
+    
+    # Payload (flexible JSON)
     payload = Column(JSON)
-    created_at = Column(DateTime, default=datetime.now)
-    processed = Column(Boolean, default=False)
+    
+    
+    # Lifecycle
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed = Column(Boolean, default=False)    # has a consumer handled it?
+    processed_at = Column(DateTime, nullable=True)
+    retry_count = Column(Integer, default=0)
+    error = Column(String, nullable=True)
+
+    # Tracing
+    correlation_id = Column(String, index=True, nullable=True)  # tie related events
+    request_id = Column(String, index=True, nullable=True)      # link to API request
