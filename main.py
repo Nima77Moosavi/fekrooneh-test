@@ -1,11 +1,14 @@
-# main.py
-from sqlalchemy import func
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
 from datetime import date
+import random
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+from fastapi import FastAPI, Depends, HTTPException, status
 
 from database import SessionLocal
 import models
+from models import User, League
+from schemas import UserResponse
 
 
 from database import engine
@@ -30,37 +33,143 @@ def get_db():
         db.close()
 
 
+# assign users global ranking
+def assign_global_ranks(db: Session):
+    subq = (
+        db.query(
+            User.id,
+            func.row_number().over(order_by=User.xp.desc()).label("rank")
+        ).subquery()
+    )
+
+    ranked_users = db.query(User, subq.c.rank).join(
+        subq, User.id == subq.c.id).all()
+
+    for user, rank in ranked_users:
+        user.rank = rank
+
+    db.commit()
+
+
+# assign users leagues
+def assign_leagues(db: Session):
+    subq = (
+        db.query(
+            User.id,
+            func.row_number().over(order_by=User.xp.desc()).label("rank")
+        ).subquery()
+    )
+
+    ranked_users = db.query(User, subq.c.rank).join(
+        subq, User.id == subq.c.id).all()
+
+    for user, rank in ranked_users:
+        league_id = (rank - 1) // 50 + 1
+
+        league = db.query(League).filter(League.id == league_id).first()
+        if not league:
+            league = League(id=league_id)
+            db.add(league)
+            db.commit()
+
+        user.rank = rank
+        user.league_id = league_id
+
+    db.commit()
+
+
+@app.post("/seed_users/{count}", response_model=dict)
+def seed_users(count: int, db: Session = Depends(get_db)):
+    users = []
+    for i in range(1, count + 1):
+        user = User(
+            username=f"user{i}",
+            password=f"pass{i}",
+            xp=random.randint(0, 100) * 10
+        )
+        db.add(user)
+        users.append(user)
+
+    db.commit()
+    assign_leagues(db)
+
+    return {"message": f"{count} test users created", "count": len(users)}
+
+
+@app.get("/users/{username}")
+def read_one_user(username: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "xp": user.xp,
+        "streak": user.streak,
+        "max_streak": user.max_streak,
+        "frozen_days": user.frozen_days,
+        "last_checkin": user.last_checkin,
+        "last_streak_reset": user.last_streak_reset,
+        "rank": user.rank,
+        "league_id": user.league_id
+    }
+
+
 @app.post("/users/", response_model=dict)
-def create_user(username: str, db: Session = Depends(get_db)):
-    """
-    Create a new user with default XP, streak, and frozen days.
-    """
-    user = models.User(username=username)
+def create_user(username: str, password: str, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.username == username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    user = User(username=username, password=password)
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"id": user.id, "username": user.username}
+
+    assign_leagues(db)
+    assign_global_ranks(db)
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "xp": user.xp,
+        "streak": user.streak,
+        "max_streak": user.max_streak,
+        "frozen_days": user.frozen_days,
+        "last_checkin": user.last_checkin,
+        "last_streak_reset": user.last_streak_reset,
+        "rank": user.rank,
+        "league_id": user.league_id
+    }
 
 
-@app.post("/checkin/{user_id}", response_model=dict)
-def daily_checkin(user_id: int, db: Session = Depends(get_db)):
+@app.post("/checkin/", response_model=dict)
+def daily_checkin(username: str, password: str, db: Session = Depends(get_db)):
     """
     Daily login endpoint:
     - +10 XP on check-in
     - Update streak (consecutive days)
     - Consume frozen day if user missed exactly one day
     - Reset streak if user missed 2+ days
+    - Track max_streak and last_streak_reset
     """
-    # Use Session.get() instead of Query.get() to avoid deprecation warnings
-    user = db.get(models.User, user_id)
+    user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    if user.password != password:
+        raise HTTPException(status_code=401, detail="Incorrect password")
 
     today = date.today()
 
     # Already checked in today
     if user.last_checkin == today:
-        return {"message": "Already checked in today", "xp": user.xp, "streak": user.streak}
+        return {
+            "message": "Already checked in today",
+            "xp": user.xp,
+            "streak": user.streak,
+            "max_streak": user.max_streak,
+            "frozen_days": user.frozen_days,
+        }
 
     if user.last_checkin:
         delta = (today - user.last_checkin).days
@@ -70,87 +179,118 @@ def daily_checkin(user_id: int, db: Session = Depends(get_db)):
         elif delta == 2 and user.frozen_days > 0:
             # missed one day, consume frozen day
             user.frozen_days -= 1
-            user.streak += 1
+            # streak unchanged
         else:
-            # missed 2+ consecutive days
+            # missed 1 day without freeze OR missed 2+ days
             user.streak = 1
+            user.frozen_days = 1
+            user.last_streak_reset = today
     else:
         # first ever check-in
         user.streak = 1
+        user.frozen_days = 1
+
+    # update max streak if needed
+    if user.streak > user.max_streak:
+        user.max_streak = user.streak
 
     user.xp += 10
     user.last_checkin = today
 
     db.commit()
     db.refresh(user)
+    assign_leagues(db)
+    assign_global_ranks(db)
 
-    return {"xp": user.xp, "streak": user.streak, "frozen_days": user.frozen_days}
+    return {
+        "message": "Check-in successful",
+        "xp": user.xp,
+        "streak": user.streak,
+        "max_streak": user.max_streak,
+        "frozen_days": user.frozen_days,
+        "last_streak_reset": user.last_streak_reset,
+    }
 
 
 @app.get("/leagues/{league_id}", response_model=list[dict])
 def get_league(league_id: int, db: Session = Depends(get_db)):
     """
     Return all users in a given league (50 users per league).
-
-    Current approach:
-    - Uses SQL OFFSET + LIMIT to fetch only the 50 users for the requested league.
-    - Efficient with proper indexing on `xp`, even with millions of users.
-
-    Production optimization:
-    - Precompute `league_id` for each user in a background job (cron or Celery).
-    - Then this endpoint becomes a simple O(1) query:
-        SELECT * FROM users WHERE league_id = :league_id
+    Uses precomputed league_id and rank from assign_leagues.
     """
-    page_size = 50
-    offset = (league_id - 1) * page_size
-
     league_users = (
-        db.query(models.User)
-        .order_by(models.User.xp.desc())
-        .offset(offset)
-        .limit(page_size)
+        db.query(User)
+        .filter(User.league_id == league_id)
+        .order_by(User.rank.asc())
+        .all()
+    )
+
+    if not league_users:
+        raise HTTPException(
+            status_code=404, detail="League not found or empty")
+
+    return [
+        {
+            "user_id": user.id,
+            "username": user.username,
+            "xp": user.xp,
+            "streak": user.streak,
+            "max_streak": user.max_streak,
+            "frozen_days": user.frozen_days,
+            "last_checkin": user.last_checkin,
+            "last_streak_reset": user.last_streak_reset,
+            "rank": user.rank,
+            "league_id": user.league_id
+        }
+        for user in league_users
+    ]
+
+
+@app.get("/league/", response_model=list[dict])
+def get_league(db: Session = Depends(get_db)):
+    users = (
+        db.query(User)
+        .order_by(User.rank.asc())
         .all()
     )
 
     return [
-        {"id": u.id, "username": u.username, "xp": u.xp, "streak": u.streak}
-        for u in league_users
+        {
+            "user_id": user.id,
+            "username": user.username,
+            "xp": user.xp,
+            "streak": user.streak,
+            "max_streak": user.max_streak,
+            "frozen_days": user.frozen_days,
+            "last_checkin": user.last_checkin,
+            "last_streak_reset": user.last_streak_reset,
+            "rank": user.rank,
+            "league_id": user.league_id
+        }
+        for user in users
     ]
 
 
-@app.get("/users/{user_id}/league", response_model=dict)
-def get_user_league(user_id: int, db: Session = Depends(get_db)):
+@app.get("/users/{username}/league", response_model=dict)
+def get_user_league(username: str, db: Session = Depends(get_db)):
     """
-    Find which league a specific user belongs to.
-
-    Current approach:
-    - Uses a SQL window function (ROW_NUMBER() OVER ORDER BY xp DESC).
-    - Guarantees every user has a unique sequential rank, even if XP values are tied.
-    - This ensures exactly 50 users per league.
-
-    Alternative approach:
-    - Use RANK() if you want ties to share the same rank (like in sports),
-      but then leagues may overflow/underflow.
-    - For predictable league sizes, ROW_NUMBER() is the better choice.
-
-    Production optimization:
-    - Run a periodic batch job (cron or Celery) that updates `rank` and `league_id`.
-    - Then this endpoint is just:
-        SELECT rank, league_id FROM users WHERE id = :user_id
-    - O(1) lookup, no heavy ranking query.
+    Return the league and rank of a specific user.
+    Uses precomputed rank and league_id from assign_leagues.
     """
-    subq = (
-        db.query(
-            models.User.id,
-            func.row_number().over(order_by=models.User.xp.desc()).label("rank")
-        ).subquery()
-    )
+    user = db.query(User).filter(User.username == username).first()
 
-    row = db.query(subq.c.rank).filter(subq.c.id == user_id).first()
-    if not row:
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    rank = row.rank
-    league_id = (rank - 1) // 50 + 1
-
-    return {"user_id": user_id, "league_id": league_id, "rank": rank}
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "xp": user.xp,
+        "streak": user.streak,
+        "max_streak": user.max_streak,
+        "frozen_days": user.frozen_days,
+        "last_checkin": user.last_checkin,
+        "last_streak_reset": user.last_streak_reset,
+        "rank": user.rank,
+        "league_id": user.league_id
+    }
