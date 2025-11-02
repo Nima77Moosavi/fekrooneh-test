@@ -1,6 +1,8 @@
-from sqlalchemy import Column, Integer, String, Date, ForeignKey
+from sqlalchemy import Column, Integer, Boolean, String, Date, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Relationship
 from database import Base
+
+from datetime import datetime
 
 
 class League(Base):
@@ -30,3 +32,14 @@ class User(Base):
 
     def __repr__(self):
         return f"<User(username={self.username}, xp={self.xp}, streak={self.streak}, rank={self.rank}, league={self.league_id})>"
+
+
+class EventLog(Base):
+    __tablename__ = "event_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    event_type = Column(String, index=True) # e.g. "checkin", "user_created"
+    user_id = Column(Integer, index=True)
+    payload = Column(JSON)
+    created_at = Column(DateTime, default=datetime.now)
+    processed = Column(Boolean, default=False)
