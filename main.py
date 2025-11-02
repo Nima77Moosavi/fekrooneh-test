@@ -96,11 +96,19 @@ def seed_users(count: int, db: Session = Depends(get_db)):
     return {"message": f"{count} test users created", "count": len(users)}
 
 
-@app.get("/users/{username}")
-def read_one_user(username: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+@app.post("/users/", response_model=dict)
+def create_user(username: str, password: str, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.username == username).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    user = User(username=username, password=password)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    assign_leagues(db)
+    assign_global_ranks(db)
     return {
         "user_id": user.id,
         "username": user.username,
@@ -115,19 +123,11 @@ def read_one_user(username: str, db: Session = Depends(get_db)):
     }
 
 
-@app.post("/users/", response_model=dict)
-def create_user(username: str, password: str, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.username == username).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Username already exists")
-    
-    user = User(username=username, password=password)
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    assign_leagues(db)
-    assign_global_ranks(db)
+@app.get("/users/{username}")
+def read_one_user(username: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     return {
         "user_id": user.id,
         "username": user.username,

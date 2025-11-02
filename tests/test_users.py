@@ -1,20 +1,19 @@
 import pytest
 
 def test_create_user_success(client):
-    # Create a new user
     response = client.post(
         "/users/",
-        params={"username": "john", "password": "pw"}
+        params={"username": "Nima", "password": "Nima"}
     )
     assert response.status_code == 200
     data = response.json()
 
     # Verify returned fields
-    assert data["username"] == "john"
+    assert data["username"] == "Nima"
     assert data["xp"] == 0
     assert data["streak"] == 0
     assert data["max_streak"] == 0
-    assert data["frozen_days"] == 0 or data["frozen_days"] == 1  # depending on your business rule
+    assert data["frozen_days"] == 0
     assert data["rank"] is not None
     assert data["league_id"] is not None
 
@@ -42,7 +41,7 @@ def test_get_user_success(client):
     assert data["xp"] == 0
     assert data["streak"] == 0
     assert data["max_streak"] == 0
-    assert data["frozen_days"] == 0 or data["frozen_days"] == 1
+    assert data["frozen_days"] == 0
 
 
 def test_get_user_not_found(client):
