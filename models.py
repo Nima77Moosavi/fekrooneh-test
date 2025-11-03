@@ -1,18 +1,8 @@
-from sqlalchemy import Column, Integer, Boolean, String, Date, DateTime, JSON, ForeignKey
-from sqlalchemy.orm import Relationship
+from sqlalchemy import Column, Integer, Boolean, String, Date, DateTime, JSON
 from database import Base
 
 from datetime import datetime
 import uuid
-
-
-class League(Base):
-    __tablename__ = "leagues"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    def __repr__(self):
-        return f"<League(id={self.id})>"
 
 
 class User(Base):
@@ -28,11 +18,12 @@ class User(Base):
     last_checkin = Column(Date, nullable=True)
     last_streak_reset = Column(Date, nullable=True)
     rank = Column(Integer, index=True, nullable=True)
-    league_id = Column(Integer, ForeignKey("leagues.id"), nullable=True)
-    league = Relationship("League", backref='users')
 
     def __repr__(self):
-        return f"<User(username={self.username}, xp={self.xp}, streak={self.streak}, rank={self.rank}, league={self.league_id})>"
+        return (
+            f"<User(username={self.username}, xp={self.xp}, "
+            f"streak={self.streak}, rank={self.rank})>"
+        )
 
 
 class EventLog(Base):
@@ -47,13 +38,12 @@ class EventLog(Base):
     # Classification
     event_type = Column(String, index=True)  # e.g. "checkin", "user_created"
     user_id = Column(Integer, index=True)
-    partition_key = Column(String, index=True)  # e.g. user_id or league_id for ordering
+    # e.g. user_id or league_id for ordering
+    partition_key = Column(String, index=True)
 
-    
     # Payload (flexible JSON)
     payload = Column(JSON)
-    
-    
+
     # Lifecycle
     created_at = Column(DateTime, default=datetime.utcnow)
     processed = Column(Boolean, default=False)    # has a consumer handled it?
@@ -62,5 +52,7 @@ class EventLog(Base):
     error = Column(String, nullable=True)
 
     # Tracing
-    correlation_id = Column(String, index=True, nullable=True)  # tie related events
-    request_id = Column(String, index=True, nullable=True)      # link to API request
+    correlation_id = Column(
+        String, index=True, nullable=True)  # tie related events
+    # link to API request
+    request_id = Column(String, index=True, nullable=True)

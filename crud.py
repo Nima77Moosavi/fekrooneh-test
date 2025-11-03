@@ -1,11 +1,18 @@
 from datetime import date
 import random
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
+from fastapi import BackgroundTasks
+
+import redis.asyncio as redis
 
 from models import User, League
 from utils.events import log_event
+from events.producer import publish_event
+
+redis_client = redis.from_url("redis://localhost:6379", decode_responses=True)
 
 
 # -----------------------------
@@ -90,58 +97,39 @@ def get_user_league(db: Session, username: str):
 # Check-in Logic
 # -----------------------------
 def daily_checkin(db: Session, username: str, password: str):
-    # check to see if username and password are correct
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.password != password:
         raise HTTPException(status_code=401, detail="Incorrect password")
 
-    # logic
     today = date.today()
 
-    if user.last_checkin == today:
-        return user
-
-    if user.last_checkin:
-        delta = (today - user.last_checkin).days
-        if delta == 1:
-            user.streak += 1
-        elif delta >= 2 and user.frozen_days >= (delta - 1):
-            user.streak += 1
-            user.frozen_days -= (delta - 1)
+    if user.last_checkin != today:
+        if user.last_checkin:
+            delta = (today - user.last_checkin).days
+            if delta == 1:
+                user.streak += 1
+            elif delta >= 2 and user.frozen_days >= (delta - 1):
+                user.streak += 1
+                user.frozen_days -= (delta - 1)
+            else:
+                user.streak = 1
+                user.frozen_days = 1
+                user.last_streak_reset = today
         else:
             user.streak = 1
-            user.frozen_days = 1
-            user.last_streak_reset = today
-    else:
-        user.streak = 1
-        if user.frozen_days == 0:
-            user.frozen_days = 1
+            if user.frozen_days == 0:
+                user.frozen_days = 1
 
-    if user.streak > user.max_streak:
-        user.max_streak = user.streak
+        if user.streak > user.max_streak:
+            user.max_streak = user.streak
 
-    user.xp += 10
-    user.last_checkin = today
+        user.xp += 10
+        user.last_checkin = today
 
-    # add event to session
-    log_event(
-        db,
-        event_type="checkin",
-        user_id=user.id,
-        payload={"streak": user.streak,
-                 "max_streak": user.max_streak,
-                 "xp": user.xp,
-                 "frozen_days": user.frozen_days,
-                 "last_checkin": user.last_checkin,
-                 "last_streak_reset": user.last_streak_reset,
-                 },
-        partition_key=str(user.id),
-    )
-
-    db.commit()
-    db.refresh(user)
+        db.commit()
+        db.refresh(user)
 
     return user
 

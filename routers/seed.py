@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
-import crud
+from crud.users import seed_users   # make sure seed_users lives in crud/users.py
 
 router = APIRouter(prefix="/seed", tags=["seed"])
 
+
 @router.post("/users/{count}", response_model=dict)
-def seed_users(count: int, db: Session = Depends(get_db)):
-    users = crud.seed_users(db, count)
-    return {"message": f"{count} test users created", "count": len(users)}
+async def seed_users_endpoint(count: int, db: AsyncSession = Depends(get_db)):
+    users = await seed_users(db, count)
+    return {
+        "message": f"{count} test users created",
+        "count": len(users)
+    }
