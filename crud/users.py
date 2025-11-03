@@ -1,14 +1,17 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException
-from models import User
 from utils.events import log_event
 import random
 
+from models import User
+from crud.ranking import add_user_to_leaderboard
 
 # -----------------------------
 # Create User
 # -----------------------------
+
+
 async def create_user(
     db: AsyncSession,
     username: str,
@@ -39,6 +42,7 @@ async def create_user(
             "frozen_days": user.frozen_days
         }
     )
+    await add_user_to_leaderboard(user.id, user.xp)
     return user
 
 
@@ -75,5 +79,12 @@ async def seed_users(db: AsyncSession, count: int):
         db.add(user)
         users.append(user)
 
+    # Commit once so IDs are generated
     await db.commit()
+
+    # Refresh each user and add to Redis
+    for user in users:
+        await db.refresh(user)
+        await add_user_to_leaderboard(user.id, user.xp)
+
     return users

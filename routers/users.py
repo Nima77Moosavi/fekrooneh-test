@@ -37,6 +37,7 @@ async def read_one_user(username: str, db: AsyncSession = Depends(get_db)):
         "xp": user.xp,
         "streak": user.streak,
         "max_streak": user.max_streak,
+        "rank": user.rank,
         "frozen_days": user.frozen_days,
         "last_checkin": user.last_checkin,
         "last_streak_reset": user.last_streak_reset,

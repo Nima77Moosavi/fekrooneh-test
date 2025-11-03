@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
-from crud.ranking import get_full_leaderboard, get_top_n
+from crud.ranking import get_full_leaderboard, get_top_n, sync_ranks_to_db
 
 router = APIRouter(prefix="/leaderboard", tags=["leaderboard"])
 
@@ -26,3 +26,8 @@ async def get_leaderboard_top(n: int = 10):
     if not leaderboard:
         raise HTTPException(status_code=404, detail="Leaderboard is empty")
     return leaderboard
+
+@router.post("/sync-leaderboard")
+async def trigger_sync(db: AsyncSession = Depends(get_db)):
+    await sync_ranks_to_db(db)
+    return {"status": "ok", "message": "Leaderboard synced to DB"}

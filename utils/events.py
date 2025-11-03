@@ -1,11 +1,11 @@
 import uuid
 from datetime import datetime
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from models import EventLog
 
 
-def log_event(
-    db: Session,
+async def log_event(
+    db: AsyncSession,
     event_type: str,
     user_id: int,
     payload: dict,
@@ -27,5 +27,6 @@ def log_event(
         request_id=request_id,
     )
     db.add(event)
-    # ⚠️ Don’t commit here — let the caller decide when to commit
+    await db.commit()
+    await db.refresh(event)
     return event
