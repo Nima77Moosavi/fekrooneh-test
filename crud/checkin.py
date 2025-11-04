@@ -21,6 +21,10 @@ async def daily_checkin(db: AsyncSession, username: str, password: str):
 
     today = date.today()
 
+    # if already checked in today return a message with xp
+    if user.last_checkin == today:
+        return user, False
+
     # Only update if not already checked in today
     if user.last_checkin != today:
         if user.last_checkin:
@@ -67,4 +71,4 @@ async def daily_checkin(db: AsyncSession, username: str, password: str):
             },
         )
 
-    return user
+    return user, True

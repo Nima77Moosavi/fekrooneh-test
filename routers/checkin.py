@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from crud.checkin import daily_checkin
 from events.producer import publish_event
+from datetime import date
 
 router = APIRouter(prefix="/checkin", tags=["checkin"])
 
@@ -15,7 +16,17 @@ async def daily_checkin_endpoint(
     background_tasks: BackgroundTasks = None
 ):
     # call async CRUD
-    user = await daily_checkin(db, username, password)
+    user, checked_in = await daily_checkin(db, username, password)
+
+    if not checked_in:
+        return {
+            "message": "already checked in today",
+            "user": user.id,
+            "xp": user.xp,
+            "streak": user.streak,
+            "max_streak": user.max_streak,
+            "frozen_days": user.frozen_days
+        }
 
     # prepare event payload for Redis
     event_payload = {
