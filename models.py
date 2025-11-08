@@ -1,8 +1,11 @@
 from sqlalchemy import Column, Integer, Boolean, String, Date, DateTime, JSON
+from sqlalchemy.orm import Mapped, mapped_column
 from database import Base
 
 from datetime import datetime
 import uuid
+
+
 
 
 class User(Base):
@@ -11,7 +14,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     password = Column(String, nullable=False)
-    xp = Column(Integer, default=0)
+    # xp : Mapped[int | None] = mapped_column(default=0)
     streak = Column(Integer, default=0)
     max_streak = Column(Integer, default=0)
     frozen_days = Column(Integer, default=0)
